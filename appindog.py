@@ -3,6 +3,7 @@ import numpy as np
 from PIL import Image
 import tensorflow as tf
 import os
+import time
 
 # ==========================================
 # 1. SETUP & STYLING
@@ -88,36 +89,46 @@ translations = {
 
 
 # ==========================================
-# 2. LOGIC & FUNCTIONS (แก้ไขจุดสำคัญ)
+# 2. LOGIC & FUNCTIONS
 # ==========================================
 @st.cache_resource
 def load_ai_model():
-    # หาตำแหน่งไฟล์ปัจจุบัน เพื่อสร้าง Path ที่ถูกต้อง 100%
+    # หาตำแหน่งไฟล์ปัจจุบัน เพื่อสร้าง Path ที่ถูกต้อง
     current_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # ชื่อไฟล์ต้องตรงกับใน GitHub เป๊ะๆ (Case Sensitive)
     model_path = os.path.join(current_dir, 'dog_model_binary.keras')
 
     try:
-        # ลองโหลดโมเดล
-        model = tf.keras.models.load_model(model_path)
-        return model, None  # Return model, No error
+        # Check if file exists first
+        if not os.path.exists(model_path):
+            return None, f"File not found at: {model_path}"
+
+        # --- KEY FIX: compile=False ---
+        # ป้องกัน Error เรื่อง Optimizer state ไม่ตรงกันระหว่างเวอร์ชัน
+        model = tf.keras.models.load_model(model_path, compile=False)
+        return model, None
     except Exception as e:
-        # ถ้าพัง ให้ส่ง Error กลับไปบอกผู้ใช้
         return None, str(e)
 
 
 def predict_image(model, image):
+    # Resize ภาพให้ตรงกับที่ Model ต้องการ (224x224)
     img = image.resize((224, 224))
     img_array = np.array(img)
 
+    # ถ้ามี 4 channels (RGBA) ให้ตัดเหลือแค่ 3 (RGB)
     if img_array.shape[-1] == 4:
         img_array = img_array[..., :3]
 
     img_array = np.expand_dims(img_array, axis=0)
-    img_array = img_array.astype(np.float32)
+    img_array = img_array.astype(np.float32)  # เปลี่ยนเป็น float32 ตามมาตรฐาน TensorFlow
 
+    # Predict
     prediction = model.predict(img_array)
     score = prediction[0][0]
 
+    # Logic ตามที่เทรนมา (ปรับได้ถ้าผลกลับด้าน)
     if score < 0.5:
         is_ai = True
         ai_percent = (1 - score) * 100
@@ -129,6 +140,7 @@ def predict_image(model, image):
 
 
 def check_sensitive_content(image):
+    # จำลองการตรวจจับ (Logic เดิมของคุณ)
     import random
     return random.random() > 0.7
 
@@ -142,9 +154,6 @@ if 'sensitive_confirmed' not in st.session_state: st.session_state.sensitive_con
 
 t = translations[st.session_state.lang]
 
-# --- Load Model with Error Handling ---
-model, error_msg = load_ai_model()
-
 # Sidebar
 with st.sidebar:
     st.header("Settings ⚙️")
@@ -153,7 +162,8 @@ with st.sidebar:
         st.session_state.lang = 'en'
     else:
         st.session_state.lang = 'th'
-    st.rerun if lang_choice != ("ภาษาไทย" if st.session_state.lang == 'th' else "English") else None
+    if lang_choice != ("ภาษาไทย" if st.session_state.lang == 'th' else "English"):
+        st.rerun()
 
 # Cookie Banner
 if st.session_state.cookie_consent is None:
@@ -169,12 +179,14 @@ if st.session_state.cookie_consent is None:
 
 st.markdown(f"""<div class="main-header"><h1>{t['title']}</h1><p>{t['subtitle']}</p></div>""", unsafe_allow_html=True)
 
-# --- Model Check & Error Display ---
+# --- Load Model ---
+model, error_msg = load_ai_model()
+
 if model is None:
     st.error(f"{t['error_model']}")
     if error_msg:
         st.warning(f"🔍 Technical Error Details:\n\n{error_msg}")
-        st.info("Tip: Try checking 'requirements.txt' tensorflow version or rebuild the app.")
+        st.info("Suggestion: Check 'requirements.txt' includes 'tensorflow==2.15.0'")
 else:
     uploaded_file = st.file_uploader(t['upload_label'], type=['jpg', 'png', 'webp', 'heic', 'jpeg'])
 
@@ -182,6 +194,7 @@ else:
         image = Image.open(uploaded_file)
         st.image(image, caption="Preview", use_container_width=True)
 
+        # Check Sensitive Content
         if 'last_uploaded' not in st.session_state or st.session_state.last_uploaded != uploaded_file.name:
             st.session_state.is_sensitive = check_sensitive_content(image)
             st.session_state.last_uploaded = uploaded_file.name
@@ -200,15 +213,16 @@ else:
                     st.rerun()
             st.stop()
 
+        # Button Analyze
         if st.button("🚀 " + t['analyzing'].replace("...", ""), type="primary", use_container_width=True):
             progress_text = t['analyzing']
             my_bar = st.progress(0, text=progress_text)
-            import time
 
             for percent_complete in range(100):
                 time.sleep(0.01)
                 my_bar.progress(percent_complete + 1, text=progress_text)
 
+            # Predict
             is_ai, ai_percent = predict_image(model, image)
             my_bar.empty()
 
